@@ -1,7 +1,5 @@
 # ARQ2-2026-TS-009
 
-**Proyecto de arquitectura número 2 — grupo número 09**
-
 ## Caso Asignado
 
 **Case 9: AeroBooking - GDS Distribuido**
