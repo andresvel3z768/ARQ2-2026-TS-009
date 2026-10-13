@@ -20,3 +20,5 @@ Problematic Scenario: AeroBooking connects hundreds of travel agencies with glob
 3. Design of a "Distributed Lock" mechanism that temporarily separates inventory at the exact moment of checkout.
 4. Orchestrated purchase flow involving the automatic compensation pattern: If the airline confirms the seat does not exist, AeroBooking must trigger the money reversal to the agency without human intervention.
 5. Centralized auditing and logs system that allows forensic demonstration of when and why the airline rejected the agency's transaction.
+
+Link TS-009 Google Docs: https://docs.google.com/document/d/15p6cG6IwW_TF4gdOVqE9SkyBVj_hQbXlB5tfVk33TTE/edit?usp=sharing
