@@ -10,7 +10,7 @@
 - Jhon Alejandro Isaza Pérez
 - Luis Felipe Pico Gutiérrez
 - Jhoann Jaramillo Deossa
-
+- Adrian Felipe Ramirez Rios
 
 Case 9: AeroBooking - Distributed GDS
 Problematic Scenario: AeroBooking connects hundreds of travel agencies with global airline direct APIs. Agencies have bots that search for the same flight over and over every second. AeroBooking passes all these requests directly to the airlines, which charge them hefty fines for exceeding the Rate Limit and temporarily block their connection. The second major business risk happens when two different agencies try to buy seat "12A" on the same flight almost simultaneously. The AeroBooking system marks the purchase as successful for both locally, but the airline rejects the second request, triggering million-dollar manual disputes with agencies for fraud and cross-charges that the system is unable to reconcile or reverse.
