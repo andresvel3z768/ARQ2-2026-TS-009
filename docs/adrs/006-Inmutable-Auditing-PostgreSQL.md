@@ -6,7 +6,7 @@
 
 - Alternatives Considered: (1) Append-only PostgreSQL (with `INSERT`-only permissions and a hash chain); (2) Elasticsearch/OpenSearch; (3) MongoDB; (4) Logs in Loki only.
 
-- Decision: The Audit Service consumes `#` messages from RabbitMQ and writes them to `audit_db` using a role without `UPDATE`/`DELETE` permissions, **triggers** that block modifications, a `hash = SHA-256(prevHash + payload)` column, and an `airline_interactions` table containing the raw request and response of every call to the airline. Technical logs are sent to Loki using the same `correlationId`.
+- Decision: The Audit Service consumes `#` messages from RabbitMQ and writes them to `audit_log` using a role without `UPDATE`/`DELETE` permissions, **triggers** that block modifications, a `hash = SHA-256(prevHash + payload)` column, and an `airline_interactions` table containing the raw request and response of every call to the airline. Technical logs are sent to Loki using the same `correlationId`.
 
 - Trade-offs:
   - Pros: Verifiable integrity (the hash chain detects tampering); SQL queries by `bookingId`/`correlationId`; no additional engine to operate; enables forensic answers to the questions: "What did AeroBooking request, what did the airline respond, and when?"
