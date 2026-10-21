@@ -10,7 +10,7 @@
 | Booking Service (Node.js 24 LTS + Express 5 + amqplib) | Saga Orchestrator for the purchase flow: acquires the seat lock, holds funds, confirms with the airline, and drives automatic compensation on rejection (Features 3 and 4) |
 | Airline Connector (Node.js 24 LTS + Axios + opossum) | Sole integration point with external airline APIs; translates real airline confirmations/rejections into internal domain events |
 | RabbitMQ (4.3, AMQP 0-9-1) | Asynchronous broker connecting Booking Service, Airline Connector, and Audit Service, decoupling the purchase flow from downstream processing |
-| Audit Service (Node.js 24 LTS + Fastify) | Persists every domain event in an append-only, hash-chained log tagged by correlationId, enabling tamper-evident forensic reconstruction of any transaction (Feature 5) |
+| Audit Service (Node.js 24 LTS + Fastify) | Persists every domain event in the append-only, hash-chained `audit_log` table (inside `booking_db`), enabling tamper-evident forensic reconstruction of any transaction by correlationId (Feature 5) |
 
 ## 2. Domain Data Schemas
 
@@ -75,7 +75,7 @@
 - service: string (e.g. "airline-connector")
 - eventType: string (e.g. "booking.rejected")
 - payload: JSON
-- hash: string (SHA-256 of prevHash + payload, per ADR 006 — immutable, append-only chain)
+- hash: string (SHA-256 of prevHash + payload, per ADR 006 — immutable, append-only chain in `booking_db.audit_log`)
 - timestamp: ISO8601 datetime
 
 ## 3. REST APIs
@@ -200,7 +200,7 @@ All events are published to the `aerobooking.events` topic exchange over AMQP 0-
 
 1. **Feature 1 (B2B auth):**
    WHEN an agency authenticates via the OAuth2 `client_credentials` grant with a valid `client_id`/`client_secret`
-   THEN the Auth Service responds with an RS256 JWT valid for 15 minutes, the API Gateway validates its signature locally using the Auth Service's public key (no per-request call to Auth Service), and any request without a valid token is rejected with `401` before reaching the microservice.
+   THEN the Auth Service responds with an RS256 JWT valid for 15 minutes, the API Gateway validates its signature locally using the Auth Service's public key (no per-request call to Auth Service), and any request without a valid, non-revoked token is rejected with `401` before reaching the microservice.
 
 2. **Feature 2 (cached search):**
    WHEN an agency searches fares for a route/date already queried within the last 60 seconds (TTL from ADR 003)
@@ -216,4 +216,31 @@ All events are published to the `aerobooking.events` topic exchange over AMQP 0-
 
 5. **Feature 5 (forensic audit):**
    WHEN any service in the purchase flow emits a domain event (lock, confirmation, rejection, compensation)
-   THEN the Audit Service persists an immutable, hash-chained `AuditEvent` tagged with the same `correlationId`, so that `GET /v1/audit/{correlationId}` reconstructs the full, tamper-evident timeline of that transaction.
+   THEN the Audit Service persists an immutable, hash-chained `AuditEvent` in `booking_db.audit_log`, tagged with the same `correlationId`, so that `GET /v1/audit/{correlationId}` reconstructs the full, tamper-evident timeline of that transaction.
+
+## 6. Internal Processes, Triggers & Invariants
+
+These are not public API contracts, but internal mechanisms that guarantee the system's correctness — documented here so the implementation in Wave 2 stays faithful to the design.
+
+### Database triggers
+
+| Trigger | Table / DB | Condition | Action |
+| --- | --- | --- | --- |
+| `block_audit_mutation` | `booking_db.audit_log` | Any `UPDATE` or `DELETE` statement | Rejects the statement (the writing role itself also lacks `UPDATE`/`DELETE` grants on this table, per ADR 006 — defense in depth) |
+| `compute_hash_chain` | `booking_db.audit_log` | `BEFORE INSERT` | Computes `hash = SHA-256(prevHash + payload)` using the previous row's hash, so any row tampered with after the fact breaks the chain |
+
+### Background jobs
+
+| Job | Owner service | Trigger | Action |
+| --- | --- | --- | --- |
+| Saga recovery sweep | Booking Service | Runs every 30s | Finds sagas in a non-final state whose `updatedAt` exceeds their step timeout; resumes them from their persisted `purchase_saga` state or moves them to `COMPENSATING` |
+| Outbox relay | Booking Service | Continuous (polling or CDC) | Reads unpublished rows from the `outbox` table and publishes them to RabbitMQ, guaranteeing the DB write and the message are never inconsistent |
+| API key grace-period expiry | Auth Service | Runs every 1 min | Revokes a rotated API key once its 10-minute grace period (ADR 007) has elapsed |
+| Cold archiving | Audit Service | Monthly | Partitions `audit_log` by month and moves old partitions to cold storage (ADR 006), keeping the table queryable without unbounded growth |
+
+### Invariants (must always hold)
+
+- A `SeatLock` is never granted to two agencies for the same `flightId:seatNumber` at the same time (enforced atomically by Valkey's `SET NX`, per ADR 004).
+- A `Booking` never stays in `PENDING` past its saga's step timeout without either advancing or compensating (enforced by the saga recovery sweep).
+- Every row in `booking_db.audit_log` is cryptographically linked to the previous one; a gap or mismatch in the hash chain means tampering (ADR 006).
+- A JWT accepted by the Gateway is never older than 15 minutes nor present in the Valkey revocation list (ADR 007).
