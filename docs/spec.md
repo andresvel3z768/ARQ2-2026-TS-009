@@ -4,15 +4,13 @@
 
 | Service | Responsibility |
 | --- | --- |
-| API Gateway (Kong Gateway 3.9 OSS, DB-less mode) | Single entry point for all client traffic: JWT/API-key enforcement, per-agency rate limiting, Idempotency-Key validation, X-Correlation-ID injection |
-| Auth Service (Node.js 24 LTS + Fastify + jsonwebtoken) | Issues and validates JWTs (HS256); stores agency API keys hashed with bcrypt in PostgreSQL |
-| Search Service (Node.js 24 LTS + Express 5) | Cache-aside fare search against Valkey, with a single-flight lock to prevent cache-stampede on misses |
-| Booking Service (Node.js 24 LTS + Express 5 + amqplib) | Saga Orchestrator for the purchase flow: acquires the seat lock, holds funds, confirms with the airline, and drives automatic compensation on rejection |
-| Airline Connector (Node.js 24 LTS + Axios + opossum circuit breaker) | Sole integration point with external airline APIs; applies a per-airline token-bucket rate limiter and a circuit breaker |
-| RabbitMQ (4.3, AMQP 0-9-1) | Asynchronous broker; topic exchange `aerobooking.events`, durable per-consumer queues, publisher confirms, manual ACKs, DLX for poison messages |
-| Audit Service (Node.js 24 LTS + Fastify) | Consumes `saga.*`, `booking.*` and `airline.*` events; append-only forensic log in PostgreSQL, queryable by `correlationId` |
-| Valkey (9.x OSS, RESP3) | Fare cache (TTL + stale-while-revalidate), seat locks (`SET NX PX` + fencing token via Lua), per-airline rate-limit counters, idempotency keys |
-| PostgreSQL (18) | `booking_db`: agencies, bookings, `purchase_saga` state, transactional outbox/inbox, agency balances, `audit_log` |
+| API Gateway (Kong Gateway 3.9 OSS, DB-less mode) | Single entry point for all client traffic: validates JWT signatures locally with the Auth Service's public key, per-agency rate limiting, Idempotency-Key validation, X-Correlation-ID injection |
+| Auth Service (Node.js 24 LTS + Fastify) | B2B authentication via OAuth2 `client_credentials` grant; issues short-lived JWTs (RS256) and manages rotatable API keys (Feature 1) |
+| Search Service (Node.js 24 LTS + Express 5) | Cache-aside fare search against Valkey, with a single-flight lock to prevent cache-stampede on misses (Feature 2) |
+| Booking Service (Node.js 24 LTS + Express 5 + amqplib) | Saga Orchestrator for the purchase flow: acquires the seat lock, holds funds, confirms with the airline, and drives automatic compensation on rejection (Features 3 and 4) |
+| Airline Connector (Node.js 24 LTS + Axios + opossum) | Sole integration point with external airline APIs; translates real airline confirmations/rejections into internal domain events |
+| RabbitMQ (4.3, AMQP 0-9-1) | Asynchronous broker connecting Booking Service, Airline Connector, and Audit Service, decoupling the purchase flow from downstream processing |
+| Audit Service (Node.js 24 LTS + Fastify) | Persists every domain event in an append-only, hash-chained log tagged by correlationId, enabling tamper-evident forensic reconstruction of any transaction (Feature 5) |
 
 ## 2. Domain Data Schemas
 
@@ -73,10 +71,11 @@
 ### AuditEvent
 - eventId: UUID
 - correlationId: UUID
-- sagaId: UUID (nullable — not every audited event belongs to a saga)
+- sagaId: UUID (nullable)
 - service: string (e.g. "airline-connector")
 - eventType: string (e.g. "booking.rejected")
 - payload: JSON
+- hash: string (SHA-256 of prevHash + payload, per ADR 006 — immutable, append-only chain)
 - timestamp: ISO8601 datetime
 
 ## 3. REST APIs
@@ -84,14 +83,22 @@
 ### POST /v1/auth/token
 
 - **Auth:** none (this endpoint grants it)
+- **Grant type:** OAuth2 `client_credentials` (per ADR 007)
 - **Request body:**
 ```json
-  { "apiKey": "string", "apiSecret": "string" }
+  { "grant_type": "client_credentials", "client_id": "string", "client_secret": "string", "scope": "string" }
 ```
 - **Responses:**
-  - `200 OK` → `{ "accessToken": "jwt-string", "expiresIn": 3600 }`
-  - `401 Unauthorized` → invalid credentials
+  - `200 OK` → `{ "access_token": "jwt-string (RS256)", "token_type": "Bearer", "expires_in": 900 }` — 15-minute token containing `agencyId`, `scope`, `plan` claims; validated locally by the Gateway using the Auth Service's public key (no call back to Auth Service per request)
+  - `401 Unauthorized` → invalid client credentials
   - `429 Too Many Requests` → agency exceeded its rateLimitTier
+
+### POST /v1/auth/keys/rotate
+
+- **Auth:** Bearer JWT (agency scope)
+- **Responses:**
+  - `200 OK` → `{ "newApiKeyId": "string", "gracePeriodEndsAt": "ISO8601" }` — old key stays valid for a 10-minute grace period (per ADR 007)
+  - `401 Unauthorized` → invalid/missing token
 
 ### GET /v1/fares/search
 
@@ -123,7 +130,7 @@
   { "lockToken": "string", "fareQuoteId": "string", "paymentMethodId": "string" }
 ```
 - **Responses:**
-  - `202 Accepted` → `{ "bookingId": "string", "correlationId": "string", "status": "PENDING" }` (the saga starts asynchronously)
+  - `202 Accepted` → `{ "bookingId": "string", "correlationId": "string", "status": "PENDING" }`
   - `409 Conflict` → `lockToken` expired or invalid
   - `401 Unauthorized` → invalid token
 
@@ -138,7 +145,7 @@
 
 - **Auth:** Bearer JWT (admin/professor scope)
 - **Responses:**
-  - `200 OK` → `[ { "eventId": "string", "service": "string", "eventType": "string", "timestamp": "ISO8601" } ]` (chronologically ordered)
+  - `200 OK` → `[ { "eventId": "string", "service": "string", "eventType": "string", "hash": "string", "timestamp": "ISO8601" } ]` (chronologically ordered; `hash` lets the chain's integrity be verified)
   - `404 Not Found` → no events for that correlationId
 
 ## 4. Asynchronous Events
@@ -192,8 +199,8 @@ All events are published to the `aerobooking.events` topic exchange over AMQP 0-
 ## 5. Requirements & Scenarios (WHEN/THEN — one per mandatory feature)
 
 1. **Feature 1 (B2B auth):**
-   WHEN an agency sends a valid `apiKey`/`apiSecret` pair to `/v1/auth/token`
-   THEN the Auth Service responds with a JWT valid for 1 hour, and any subsequent request to a protected endpoint without that JWT (or with an expired one) is rejected with `401` by the API Gateway before reaching the microservice.
+   WHEN an agency authenticates via the OAuth2 `client_credentials` grant with a valid `client_id`/`client_secret`
+   THEN the Auth Service responds with an RS256 JWT valid for 15 minutes, the API Gateway validates its signature locally using the Auth Service's public key (no per-request call to Auth Service), and any request without a valid token is rejected with `401` before reaching the microservice.
 
 2. **Feature 2 (cached search):**
    WHEN an agency searches fares for a route/date already queried within the last 60 seconds (TTL from ADR 003)
@@ -201,7 +208,7 @@ All events are published to the `aerobooking.events` topic exchange over AMQP 0-
 
 3. **Feature 3 (distributed lock):**
    WHEN two agencies try to lock the same `flightId:seatNumber` concurrently
-   THEN only the first succeeds (`200`, with a unique `fencingToken`), and the second gets `409 Conflict` immediately — no partial or duplicate lock is ever granted.
+   THEN only the first succeeds (`200`, with a unique `fencingToken`), and the second gets `409 Conflict` immediately.
 
 4. **Feature 4 (saga compensation):**
    WHEN the Airline Connector publishes `booking.rejected` for a Booking whose saga is in `AIRLINE_CONFIRMED` or an earlier state
@@ -209,4 +216,4 @@ All events are published to the `aerobooking.events` topic exchange over AMQP 0-
 
 5. **Feature 5 (forensic audit):**
    WHEN any service in the purchase flow emits a domain event (lock, confirmation, rejection, compensation)
-   THEN the Audit Service persists an `AuditEvent` tagged with the same `correlationId`, so that `GET /v1/audit/{correlationId}` reconstructs the full timeline of that transaction, including the airline's raw rejection reason when applicable.
+   THEN the Audit Service persists an immutable, hash-chained `AuditEvent` tagged with the same `correlationId`, so that `GET /v1/audit/{correlationId}` reconstructs the full, tamper-evident timeline of that transaction.
