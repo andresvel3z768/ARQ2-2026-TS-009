@@ -1,6 +1,6 @@
 # ADR 005: Orchestrated Saga with Automatic Compensation for the Purchase Flow
 
-- Status: Proposed
+- Status: Accepted
 
 - Context and Problems: A purchase touches several independent resources: the seat lock (ADR 004), the agency's balance, and the airline's booking API, which is slow, unstable, and the only source of truth for seat availability. Today AeroBooking marks the purchase as successful locally before the airline answers. When the airline rejects the seat, the agency has already been charged, nothing undoes it automatically, and the result is million-dollar manual disputes. A distributed ACID transaction (2PC) is not possible because the airline is an external system that does not take part in our transactions. The business requires that **if the airline confirms that the seat does not exist, the money is returned to the agency without human intervention**. Every step and every compensation must also be traceable for forensic auditing.
 

@@ -1,6 +1,6 @@
 # ADR 003: Redis for Fare Caching, Single-Flight, and Rate Limiting Toward Airlines
 
-- Status: Proposed
+- Status: Accepted
 
 - Context and Problems: Agencies repeat the same search every second, and every request reaches the airline, which penalizes requests that exceed its rate limit. Fares are valid for a limited period, so they can be served from memory during that time. Additionally, even with caching, 100 simultaneous searches during a *cache miss* could generate 100 calls to the airline (*cache stampede*).
 

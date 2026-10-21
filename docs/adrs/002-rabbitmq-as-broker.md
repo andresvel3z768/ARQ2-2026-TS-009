@@ -1,6 +1,6 @@
 # ADR 002: RabbitMQ as the Messaging Broker for the Purchase Saga
 
-- Status: Proposed
+- Status: Accepted
 
 - Context and Problems: The purchase workflow involves inventory, agency balance, and a slow and unstable external airline. It must tolerate partial failures, retries, and the delivery of commands and responses between services without synchronous coupling. Service-specific queues, routing by event type, dead-letter handling, and delivery acknowledgments are required.
 

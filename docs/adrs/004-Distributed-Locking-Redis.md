@@ -1,6 +1,6 @@
 # ADR 004: Distributed Seat Locking with Redis and Fencing Tokens
 
-- Status: Proposed
+- Status: Accepted
 
 - Context and Problems: Two agencies may attempt to purchase seat 12A on the same flight at almost the same time. Currently, both receive a local success response, and only afterward does the airline reject the second request. Inventory must be reserved exclusively for a short period immediately before checkout, preventing a slow or paused process (due to garbage collection or network delays) from continuing to act with an expired lock.
 

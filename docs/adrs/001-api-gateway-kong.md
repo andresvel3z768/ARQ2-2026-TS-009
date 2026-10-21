@@ -1,6 +1,6 @@
 # ADR 001: API Gateway as an only entry point (Kong)
 
-- Status: Proposed
+- Status: Accepted
 
 - Context and Problems: Hundreds of agencies have bots that query the same flight every second, and these requests currently go directly to the airlines, which impose penalties for exceeding their rate limits. Additionally, each service reimplements authentication, and there is no idempotency validation at the point of purchase entry. A single entry point is needed to authenticate requests, rate-limit traffic per agency, validate the Idempotency-Key, and generate the X-Correlation-ID.
 
