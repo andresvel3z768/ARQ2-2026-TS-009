@@ -11,6 +11,8 @@
 | Airline Connector (Node.js 24 LTS + Axios + opossum) | Sole integration point with external airline APIs; translates real airline confirmations/rejections into internal domain events |
 | RabbitMQ (4.3, AMQP 0-9-1) | Asynchronous broker connecting Booking Service, Airline Connector, and Audit Service, decoupling the purchase flow from downstream processing |
 | Audit Service (Node.js 24 LTS + Fastify) | Persists every domain event in the append-only, hash-chained `audit_log` table (inside `booking_db`), enabling tamper-evident forensic reconstruction of any transaction by correlationId (Feature 5) |
+| PostgreSQL (16) | `booking_db`: agencies, bookings, `purchase_saga` state, transactional outbox/inbox, agency balances, and append-only `audit_log` with cryptographic triggers |
+| Valkey (8.x / 9.x OSS, RESP3) | Fare cache (TTL + stale-while-revalidate), seat locks (`SET NX PX` + fencing token via Lua), per-airline rate-limit counters, and idempotency keys |
 
 ## 2. Domain Data Schemas
 
@@ -127,13 +129,14 @@
 - **Headers:** `Idempotency-Key: <uuid>` (required — validated by API Gateway)
 - **Request body:**
 ```json
-  { "lockToken": "string", "fareQuoteId": "string", "paymentMethodId": "string" }
+ { "flightId": "string", "seatNumber": "string", "lockToken": "string", "fareQuoteId": "string", "paymentMethodId": "string" }
 ```
 - **Responses:**
-  - `202 Accepted` → `{ "bookingId": "string", "correlationId": "string", "status": "PENDING" }`
-  - `409 Conflict` → `lockToken` expired or invalid
-  - `401 Unauthorized` → invalid token
-
+  - `202 Accepted` → { "bookingId": "string", "correlationId": "string", "status": "PENDING" } (the saga starts asynchronously; client polls GET /v1/bookings/{bookingId})
+  - `400 Bad Request` → missing required fields or missing Idempotency-Key header
+  - `401 Unauthorized` → invalid, missing, or revoked token
+  - `402 Payment Required` → agency credit balance is insufficient to reserve funds
+  - `409 Conflict` → lockToken expired (TTL > 120s) or does not match active lock
 ### GET /v1/bookings/{bookingId}
 
 - **Auth:** Bearer JWT (agency scope, must own the booking)
@@ -195,6 +198,31 @@ All events are published to the `aerobooking.events` topic exchange over AMQP 0-
   { "flightId": "string", "origin": "string", "destination": "string", "timestamp": "ISO8601" }
 ```
 - **Delivery guarantee:** at-most-once (informational only, not business-critical)
+
+
+### `cmd.airline.book`
+- **Published by:** Booking Service
+- **Consumed by:** Airline Connector,audit
+- **Routing key:** `command.airline.book`
+- **Payload:**
+```json
+  {
+  "commandId": "uuid-string",
+  "sagaId": "uuid-string",
+  "bookingId": "uuid-string",
+  "correlationId": "uuid-string",
+  "agencyId": "uuid-string",
+  "flightId": "AV024",
+  "seatNumber": "12A",
+  "fencingToken": 42,
+  "idempotencyKey": "uuid-string",
+  "amount": 350.00,
+  "currency": "USD/COP",
+  "timestamp": "2026-11-01T17:25:00Z"
+}
+```
+- **Delivery guarantee:** at-least-once
+
 
 ## 5. Requirements & Scenarios (WHEN/THEN — one per mandatory feature)
 

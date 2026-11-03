@@ -15,11 +15,11 @@
 
     | # | Step (command) | Executed by | Compensation |
     |---|----------------|-------------|--------------|
-    | 1 | `LockSeat` (returns the *fencing token*) | Inventory (Redis, ADR 004) | `ReleaseSeat` (Lua release that checks the token) |
+    | 1 | `VerifyAndBindSeatLock` (returns the *fencing token*) | booking Service (Valkey, ADR 004) | `ReleaseSeat` (Lua release that checks the token) |
     | 2 | `RevalidatePrice` | Airline Connector | — (read-only; fails with `PRICE_CHANGED`) |
     | 3 | `ReserveFunds` (debits the agency balance and records it as a hold) | Booking Service / balance ledger | `RefundFunds` (credit entry in the ledger) |
     | 4 | `ConfirmWithAirline` (the *pivot* step) | Airline Connector | `CancelAirlineBooking` (only if the airline confirmed but a later step failed) |
-    | 5 | `MarkSeatSold` + `CompleteBooking` | Inventory / Booking Service | — (retriable steps, always completed after the pivot) |
+    | 5 | `MarkSeatSold` + `CompleteBooking` | Booking Service (Booking_db & Valkey) | — (retriable steps, always completed after the pivot) |
 
   - **Automatic compensation**: if the airline replies `SEAT_NOT_AVAILABLE` (or any business rejection), the orchestrator moves to `COMPENSATING` and runs the compensations in **reverse order**: `RefundFunds` → `ReleaseSeat`. The booking ends as `FAILED` with the airline's reason code, and the agency is notified. No human takes part.
 

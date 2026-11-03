@@ -6,7 +6,7 @@
 
 - Considered Alternatives: (1) Redis lock (`SET key token NX PX ttl`) with a fencing token; (2) Redlock across multiple Redis nodes; (3) `SELECT ... FOR UPDATE` in PostgreSQL; (4) ZooKeeper/etcd.
 
-- Decision: The Inventory Service acquires `seatlock:{flightId}:{seat}` using `SET NX PX 120000` (with a unique token as the value) and increments a counter using `INCR fence:{flightId}:{seat}` to generate a *fencing token* that is passed along with subsequent commands. The lock is released through a Lua script that verifies the token. The final state (`SOLD`) is persisted in `inventory_db`.
+- Decision: The Booking Service acquires `seatlock:{flightId}:{seat}` using `SET NX PX 120000` (with a unique token as the value) and increments a counter using `INCR fence:{flightId}:{seat}` to generate a *fencing token* that is passed along with subsequent commands. The lock is released through a Lua script that verifies the token. The final state (`SOLD`) is persisted in `booking_db`.
 
 - Trade-offs:
 

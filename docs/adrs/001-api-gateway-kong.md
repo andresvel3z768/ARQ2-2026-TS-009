@@ -10,7 +10,7 @@
 
 - Trade-offs:
 
-- Pros: Per-agency rate limiting without writing custom code; centralized authentication; version-controlled configuration in the repository; simple deployment using Docker Compose; abusive requests are rejected (429) before reaching any microservice.
+- Pros: Per-agency rate limiting without writing custom code; centralized authentication; version-controlled configuration in the repository; simple deployment using Docker Compose; abusive requests are rejected (429) before reaching any event processor.
 
 - Cons: It is a single point of failure and adds approximately 1–3 ms of latency. **Mitigation**: Use stateless DB-less replicas and health checks; the state is stored in Redis. The idempotency plugin requires a small Lua component.
 
