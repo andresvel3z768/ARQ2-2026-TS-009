@@ -1,0 +1,18 @@
+# Variables de entorno locales (pueden contener secretos)
+.env
+.env.*
+!.env.example
+
+# Claves y configuracion generada para Kong
+# La clave publica puede compartirse, pero la privada nunca debe versionarse.
+infra/kong/keys/*
+!infra/kong/keys/.gitkeep
+infra/kong/kong.generated.yml
+
+# Artefactos temporales y de sistema
+*.log
+.DS_Store
+Thumbs.db
+
+# Volumenes locales si en el futuro se usan bind mounts
+data/

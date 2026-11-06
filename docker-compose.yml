@@ -1,0 +1,60 @@
+# =============================================================================
+# AeroBooking - Docker Compose de infraestructura local
+# =============================================================================
+# Fase 1: esqueleto compartido.
+#
+# En este archivo se declaran el nombre del proyecto, la red, los volumenes y
+# las convenciones comunes. Los servicios se agregan en las fases siguientes:
+#
+#   Fase 2 -> PostgreSQL, Valkey y RabbitMQ
+#   Fase 3 -> Kong (API Gateway)
+#   Fase 4 -> Jaeger (trazabilidad, perfil core)
+#   Fase 5 -> Loki, Grafana y Alloy (perfil observability)
+#   Fase 6 -> mock de aerolinea (perfil mock)
+#
+# Comandos de referencia:
+#   docker compose config -q
+#   ./scripts/up.sh
+#   ./scripts/up.sh --profile observability
+#   ./scripts/verify.sh
+# =============================================================================
+
+# Nombre logico del proyecto. Docker lo usa como prefijo de contenedores,
+# redes y volumenes. Puede sobrescribirse con COMPOSE_PROJECT_NAME en .env.
+name: aerobooking
+
+# Ancla reutilizable para la politica de logs.
+# No es un servicio: los servicios de las siguientes fases la referencian con
+# `logging: *default-logging` para evitar que los logs llenen el disco.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# Fase 1: todavia no hay servicios.
+# El mapa vacio permite validar la configuracion base sin levantar contenedores.
+services: {}
+
+# Red unica para que los contenedores se resuelvan por nombre de servicio.
+# El aislamiento se mantiene porque los puertos solo se publican cuando un
+# servicio los necesita (por ejemplo, Kong en la Fase 3).
+networks:
+  aerobooking-net:
+    name: ${COMPOSE_PROJECT_NAME:-aerobooking}-net
+    driver: bridge
+
+# Volumenes nombrados para persistir estado fuera del ciclo de vida de los
+# contenedores. Se declaran desde la Fase 1 para que el equipo sepa donde vive
+# cada dato aunque los servicios se agreguen despues.
+volumes:
+  pgdata:
+    name: ${COMPOSE_PROJECT_NAME:-aerobooking}-pgdata
+  rabbitmqdata:
+    name: ${COMPOSE_PROJECT_NAME:-aerobooking}-rabbitmqdata
+  valkeydata:
+    name: ${COMPOSE_PROJECT_NAME:-aerobooking}-valkeydata
+  loki-data:
+    name: ${COMPOSE_PROJECT_NAME:-aerobooking}-loki-data
+  grafana-data:
+    name: ${COMPOSE_PROJECT_NAME:-aerobooking}-grafana-data

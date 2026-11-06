@@ -1,0 +1,9 @@
+# Normaliza finales de linea para que los scripts funcionen igual en Windows,
+# Linux y macOS. Git convierte a LF en el repositorio y al hacer checkout.
+* text=auto
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.sql text eol=lf
+*.example text eol=lf

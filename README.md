@@ -22,3 +22,24 @@ Problematic Scenario: AeroBooking connects hundreds of travel agencies with glob
 5. Centralized auditing and logs system that allows forensic demonstration of when and why the airline rejected the agency's transaction.
 
 Link TS-009 Google Docs: https://docs.google.com/document/d/15p6cG6IwW_TF4gdOVqE9SkyBVj_hQbXlB5tfVk33TTE/edit?usp=sharing
+
+## Infraestructura local
+
+El stack Docker Compose se construye por fases. La Fase 1 deja el esqueleto, la
+red, los volumenes y la documentacion base.
+
+- Guia de infraestructura: [docs/infra/README.md](docs/infra/README.md)
+- Detalle del compose: [docs/infra/docker-compose.md](docs/infra/docker-compose.md)
+- Variables de entorno: [docs/infra/configuration.md](docs/infra/configuration.md)
+- Operacion y verificacion: [docs/infra/operations.md](docs/infra/operations.md)
+
+Inicio rapido:
+
+```bash
+cp .env.example .env
+./scripts/verify.sh
+./scripts/up.sh
+```
+
+En la Fase 1 todavia no hay servicios definidos; `up.sh` valida la configuracion
+y avisa que los contenedores llegan en la Fase 2.
