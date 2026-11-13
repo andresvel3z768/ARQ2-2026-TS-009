@@ -1,0 +1,10 @@
+apiVersion: 1
+providers:
+  - name: AeroBooking
+    orgId: 1
+    folder: AeroBooking
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

@@ -1,0 +1,128 @@
+_format_version: "3.0"
+_transform: true
+consumers:
+  - username: demo-agency
+    custom_id: "00000000-0000-4000-8000-000000000009"
+    jwt_secrets:
+      - key: demo-client
+        algorithm: RS256
+        rsa_public_key: |
+          -----BEGIN PUBLIC KEY-----
+          MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApupKcPjERN0A9i32ZDBN
+          YAuy5nbvi5rMaq4UileKNnIeyQvQ0c/ZloyvqP5MdMIGXCkOmosXVJn9QgePW0qA
+          ervd9KF5R1kbYIrQbwkyiTYBQSOPnAvgqPAt/0y9kIlEVVf9XV0PsaIzUARi4DdW
+          0UyRphyi7DuE7AS2TK20eUHEKyhO24mgnQs+ZdMlPVCANZkBuz0/waFhyS1B2v4U
+          ctV+t/EbDsezRatvA7yhMBUffBeN4lpByXdzN3YLwFym4Xkydjb6CHh9CYWgQ65z
+          S/klwoGKw8nyZV1GORVR2F8DGs75acNvnrx8fyBwozRX2XVbWTWVf7BA/c7Pg8tG
+          lQIDAQAB
+          -----END PUBLIC KEY-----
+      - key: demo-admin
+        algorithm: RS256
+        rsa_public_key: |
+          -----BEGIN PUBLIC KEY-----
+          MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApupKcPjERN0A9i32ZDBN
+          YAuy5nbvi5rMaq4UileKNnIeyQvQ0c/ZloyvqP5MdMIGXCkOmosXVJn9QgePW0qA
+          ervd9KF5R1kbYIrQbwkyiTYBQSOPnAvgqPAt/0y9kIlEVVf9XV0PsaIzUARi4DdW
+          0UyRphyi7DuE7AS2TK20eUHEKyhO24mgnQs+ZdMlPVCANZkBuz0/waFhyS1B2v4U
+          ctV+t/EbDsezRatvA7yhMBUffBeN4lpByXdzN3YLwFym4Xkydjb6CHh9CYWgQ65z
+          S/klwoGKw8nyZV1GORVR2F8DGs75acNvnrx8fyBwozRX2XVbWTWVf7BA/c7Pg8tG
+          lQIDAQAB
+          -----END PUBLIC KEY-----
+services:
+  - name: auth-service
+    url: http://auth-service:3001
+    routes:
+      - name: auth-token-route
+        paths: [/v1/auth/token]
+        strip_path: false
+      - name: auth-key-management-route
+        paths: [/v1/auth/keys]
+        strip_path: false
+      - name: auth-token-revocation-route
+        paths: [/v1/auth/tokens]
+        strip_path: false
+  - name: search-service
+    url: http://search-service:3002
+    routes:
+      - name: search-routes
+        paths: [/v1/fares]
+        strip_path: false
+  - name: booking-service
+    url: http://booking-service:3003
+    routes:
+      - name: booking-routes
+        paths: [/v1/bookings]
+        strip_path: false
+  - name: audit-service
+    url: http://audit-service:3005
+    routes:
+      - name: audit-routes
+        paths: [/v1/audit]
+        strip_path: false
+plugins:
+  - name: prometheus
+    config:
+      per_consumer: true
+  - name: correlation-id
+    config:
+      header_name: X-Correlation-ID
+      generator: uuid
+      echo_downstream: true
+  - name: rate-limiting
+    config:
+      minute: 120
+      policy: redis
+      redis_host: valkey
+      redis_port: 6379
+      fault_tolerant: false
+  - name: jwt
+    route: { name: search-routes }
+    config:
+      claims_to_verify: [exp]
+      key_claim_name: iss
+      header_names: [authorization]
+  - name: jwt
+    route: { name: booking-routes }
+    config:
+      claims_to_verify: [exp]
+      key_claim_name: iss
+      header_names: [authorization]
+  - name: jwt
+    route: { name: audit-routes }
+    config:
+      claims_to_verify: [exp]
+      key_claim_name: iss
+      header_names: [authorization]
+  - name: jwt
+    route: { name: auth-key-management-route }
+    config:
+      claims_to_verify: [exp]
+      key_claim_name: iss
+      header_names: [authorization]
+  - name: jwt
+    route: { name: auth-token-revocation-route }
+    config:
+      claims_to_verify: [exp]
+      key_claim_name: iss
+      header_names: [authorization]
+  - name: jwt-revocation
+    route: { name: search-routes }
+    config: { redis_host: valkey, redis_port: 6379 }
+  - name: jwt-revocation
+    route: { name: booking-routes }
+    config: { redis_host: valkey, redis_port: 6379 }
+  - name: jwt-revocation
+    route: { name: audit-routes }
+    config: { redis_host: valkey, redis_port: 6379 }
+  - name: jwt-revocation
+    route: { name: auth-key-management-route }
+    config: { redis_host: valkey, redis_port: 6379 }
+  - name: jwt-revocation
+    route: { name: auth-token-revocation-route }
+    config: { redis_host: valkey, redis_port: 6379 }
+  - name: idempotency
+    config:
+      redis_host: valkey
+      redis_port: 6379
+      ttl: 86400
+      required_paths: ["/v1/bookings"]

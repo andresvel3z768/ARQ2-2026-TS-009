@@ -1,0 +1,120 @@
+name: aerobooking
+services:
+  keygen:
+    image: node:24-alpine
+    working_dir: /workspace
+    environment:
+      DEMO_CLIENT_ID: ${DEMO_CLIENT_ID:-demo-client}
+      DEMO_ADMIN_CLIENT_ID: ${DEMO_ADMIN_CLIENT_ID:-demo-admin}
+      DEMO_AGENCY_ID: ${DEMO_AGENCY_ID:-00000000-0000-4000-8000-000000000009}
+      PROVISIONING_SECRET: ${PROVISIONING_SECRET:-local-provisioning-secret-change-me}
+      NEW_AGENCY_ID: ${NEW_AGENCY_ID:-}
+      NEW_AGENCY_NAME: ${NEW_AGENCY_NAME:-}
+      NEW_CLIENT_ID: ${NEW_CLIENT_ID:-}
+      NEW_CLIENT_SECRET: ${NEW_CLIENT_SECRET:-}
+      NEW_RATE_LIMIT_TIER: ${NEW_RATE_LIMIT_TIER:-BASIC}
+      NEW_SCOPES: ${NEW_SCOPES:-fares:read,bookings:write,bookings:read,keys:rotate}
+    volumes: [".:/workspace"]
+    command: ["node", "scripts/bootstrap.js"]
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: booking_db
+      POSTGRES_USER: aerobooking
+      POSTGRES_PASSWORD: aerobooking_dev
+    ports: ["5432:5432"]
+    volumes: ["postgres_data:/var/lib/postgresql", "./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aerobooking -d booking_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  valkey:
+    image: valkey/valkey:8-alpine
+    command: ["valkey-server", "--appendonly", "yes"]
+    ports: ["6379:6379"]
+    volumes: ["valkey_data:/data"]
+    healthcheck: {test: ["CMD", "valkey-cli", "ping"], interval: 5s, timeout: 3s, retries: 20}
+  rabbitmq:
+    image: rabbitmq:4.3-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: aerobooking
+      RABBITMQ_DEFAULT_PASS: aerobooking_dev
+    ports: ["5672:5672", "15672:15672"]
+    healthcheck: {test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"], interval: 10s, timeout: 5s, retries: 15}
+  auth-service:
+    build: {context: ., args: {SERVICE_PATH: auth}}
+    environment:
+      SERVICE_NAME: auth-service
+      PORT: 3001
+      DATABASE_URL: postgres://aerobooking:aerobooking_dev@postgres:5432/booking_db
+      REDIS_URL: redis://valkey:6379
+      JWT_PRIVATE_KEY_PATH: /run/secrets/jwt-private.pem
+      JWT_PUBLIC_KEY_PATH: /run/secrets/jwt-public.pem
+      KONG_CONFIG_PATH: /gateway/kong.json
+      KONG_ADMIN_URL: http://kong:8001/config
+      PROVISIONING_SECRET: ${PROVISIONING_SECRET:-local-provisioning-secret-change-me}
+      DEMO_CLIENT_ID: ${DEMO_CLIENT_ID:-demo-client}
+      DEMO_CLIENT_SECRET: ${DEMO_CLIENT_SECRET:-demo-secret-change-me}
+      DEMO_ADMIN_SECRET: ${DEMO_ADMIN_SECRET:-demo-admin-secret-change-me}
+      DEMO_ADMIN_CLIENT_ID: ${DEMO_ADMIN_CLIENT_ID:-demo-admin}
+      DEMO_AGENCY_ID: ${DEMO_AGENCY_ID:-00000000-0000-4000-8000-000000000009}
+    volumes: ["./secrets:/run/secrets:ro", "./gateway/kong/kong.json:/gateway/kong.json"]
+    depends_on: {postgres: {condition: service_healthy}, valkey: {condition: service_healthy}, keygen: {condition: service_completed_successfully}}
+    healthcheck: {test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"], interval: 10s, timeout: 3s, retries: 10}
+  search-service:
+    build: {context: ., args: {SERVICE_PATH: search}}
+    environment: {SERVICE_NAME: search-service, DATABASE_URL: postgres://aerobooking:aerobooking_dev@postgres:5432/booking_db, REDIS_URL: redis://valkey:6379, RABBITMQ_URL: amqp://aerobooking:aerobooking_dev@rabbitmq:5672, JWT_PUBLIC_KEY_PATH: /run/secrets/jwt-public.pem, AIRLINE_CONNECTOR_URL: http://airline-connector:3004}
+    volumes: ["./secrets:/run/secrets:ro"]
+    depends_on: {postgres: {condition: service_healthy}, valkey: {condition: service_healthy}, rabbitmq: {condition: service_healthy}, auth-service: {condition: service_healthy}, airline-connector: {condition: service_healthy}}
+    healthcheck: {test: ["CMD", "node", "-e", "fetch('http://localhost:3002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"], interval: 10s, timeout: 3s, retries: 10}
+  booking-service:
+    build: {context: ., args: {SERVICE_PATH: booking}}
+    environment: {SERVICE_NAME: booking-service, DATABASE_URL: postgres://aerobooking:aerobooking_dev@postgres:5432/booking_db, REDIS_URL: redis://valkey:6379, RABBITMQ_URL: amqp://aerobooking:aerobooking_dev@rabbitmq:5672, AIRLINE_CONNECTOR_URL: http://airline-connector:3004, JWT_PUBLIC_KEY_PATH: /run/secrets/jwt-public.pem, SEAT_LOCK_TTL_MS: 120000}
+    volumes: ["./secrets:/run/secrets:ro"]
+    depends_on: {postgres: {condition: service_healthy}, valkey: {condition: service_healthy}, rabbitmq: {condition: service_healthy}, airline-connector: {condition: service_healthy}}
+    healthcheck: {test: ["CMD", "node", "-e", "fetch('http://localhost:3003/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"], interval: 10s, timeout: 3s, retries: 10}
+  airline-connector:
+    build: {context: ., args: {SERVICE_PATH: airline-connector}}
+    environment: {SERVICE_NAME: airline-connector, DATABASE_URL: postgres://aerobooking:aerobooking_dev@postgres:5432/booking_db, REDIS_URL: redis://valkey:6379, RABBITMQ_URL: amqp://aerobooking:aerobooking_dev@rabbitmq:5672, AIRLINE_REJECT_SEATS: "12A", AIRLINE_RATE_CAPACITY: 10, AIRLINE_RATE_REFILL_PER_SECOND: 2}
+    depends_on: {postgres: {condition: service_healthy}, valkey: {condition: service_healthy}, rabbitmq: {condition: service_healthy}}
+    healthcheck: {test: ["CMD", "node", "-e", "fetch('http://localhost:3004/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"], interval: 10s, timeout: 3s, retries: 10}
+  audit-service:
+    build: {context: ., args: {SERVICE_PATH: audit}}
+    environment: {SERVICE_NAME: audit-service, DATABASE_URL: postgres://aerobooking_audit:audit_writer_dev@postgres:5432/booking_db, REDIS_URL: redis://valkey:6379, AUDIT_DATABASE_URL: postgres://aerobooking_audit:audit_writer_dev@postgres:5432/booking_db, RABBITMQ_URL: amqp://aerobooking:aerobooking_dev@rabbitmq:5672, JWT_PUBLIC_KEY_PATH: /run/secrets/jwt-public.pem}
+    volumes: ["./secrets:/run/secrets:ro"]
+    depends_on: {postgres: {condition: service_healthy}, valkey: {condition: service_healthy}, rabbitmq: {condition: service_healthy}}
+    healthcheck: {test: ["CMD", "node", "-e", "fetch('http://localhost:3005/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"], interval: 10s, timeout: 3s, retries: 10}
+  kong:
+    build: ./gateway/kong
+    environment: {KONG_DATABASE: "off", KONG_DECLARATIVE_CONFIG: /usr/local/kong/declarative/kong.json, KONG_PROXY_ACCESS_LOG: /dev/stdout, KONG_ADMIN_ACCESS_LOG: /dev/stdout, KONG_PROXY_ERROR_LOG: /dev/stderr, KONG_ADMIN_ERROR_LOG: /dev/stderr, KONG_ADMIN_LISTEN: "0.0.0.0:8001", KONG_PLUGINS: "bundled,idempotency,jwt-revocation"}
+    ports: ["8000:8000", "8001:8001"]
+    volumes: ["./gateway/kong/kong.json:/usr/local/kong/declarative/kong.json:ro"]
+    depends_on: {keygen: {condition: service_completed_successfully}, valkey: {condition: service_healthy}, auth-service: {condition: service_healthy}, search-service: {condition: service_healthy}, booking-service: {condition: service_healthy}, airline-connector: {condition: service_healthy}, audit-service: {condition: service_healthy}}
+  prometheus:
+    image: prom/prometheus:v3.7.3
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    ports: ["9090:9090"]
+    volumes: ["./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    depends_on: [search-service, booking-service, auth-service, airline-connector, audit-service]
+  loki:
+    image: grafana/loki:3.6.1
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports: ["3100:3100"]
+    volumes: ["./infrastructure/loki/loki-config.yaml:/etc/loki/local-config.yaml:ro", "loki_data:/loki"]
+  promtail:
+    image: grafana/promtail:3.6.1
+    command: ["-config.file=/etc/promtail/config.yml"]
+    volumes: ["./infrastructure/loki/promtail-config.yml:/etc/promtail/config.yml:ro", "/var/log:/var/log:ro", "/var/lib/docker/containers:/var/lib/docker/containers:ro", "/var/run/docker.sock:/var/run/docker.sock"]
+    depends_on: [loki]
+  grafana:
+    image: grafana/grafana:12.2.1
+    ports: ["3000:3000"]
+    environment: {GF_SECURITY_ADMIN_USER: admin, GF_SECURITY_ADMIN_PASSWORD: admin, GF_USERS_ALLOW_SIGN_UP: "false"}
+    volumes: ["grafana_data:/var/lib/grafana", "./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro"]
+    depends_on: [prometheus, loki]
+volumes:
+  postgres_data:
+  valkey_data:
+  loki_data:
+  grafana_data:
