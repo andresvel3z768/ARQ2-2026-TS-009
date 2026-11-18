@@ -1,0 +1,1 @@
+{"scope":"bookings:write bookings:read","grant_type":"client_credentials","client_id":"demo-client","client_secret":"demo-secret-change-me"}
